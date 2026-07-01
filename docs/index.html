@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SAbDab CDR Search</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+</head>
+<body>
+  <header id="filter-bar">
+    <div class="field">
+      <label for="cdr-select">CDR</label>
+      <select id="cdr-select">
+        <option value="h1">CDR-H1</option>
+        <option value="h2">CDR-H2</option>
+        <option value="h3" selected>CDR-H3</option>
+        <option value="l1">CDR-L1</option>
+        <option value="l2">CDR-L2</option>
+        <option value="l3">CDR-L3</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="motif-input">Motif</label>
+      <input id="motif-input" type="text" placeholder="e.g. DYW or A_Y">
+      <span class="field-hint">_ = any residue, % = any run of residues</span>
+    </div>
+    <div class="field">
+      <label for="heavy-species-select">Heavy chain species</label>
+      <select id="heavy-species-select"><option value="">Any</option></select>
+    </div>
+    <div class="field">
+      <label for="light-species-select">Light chain species</label>
+      <select id="light-species-select"><option value="">Any</option></select>
+    </div>
+    <div class="field">
+      <label for="organism-select">Antigen organism</label>
+      <select id="organism-select"><option value="">Any</option></select>
+    </div>
+    <div class="field">
+      <label for="antigen-type-select">Antigen type</label>
+      <select id="antigen-type-select"><option value="">Any</option></select>
+    </div>
+    <div class="field">
+      <label for="method-select">Method</label>
+      <select id="method-select"><option value="">Any</option></select>
+    </div>
+    <div class="field">
+      <label for="resolution-max-input">Resolution &le;</label>
+      <input id="resolution-max-input" type="number" step="0.1" placeholder="&Aring;">
+    </div>
+    <div class="field checkbox-field">
+      <label><input id="engineered-checkbox" type="checkbox"> Engineered only</label>
+    </div>
+    <button id="search-button">Search</button>
+  </header>
+
+  <main id="content">
+    <section id="results-panel">
+      <div id="results-toolbar">
+        <div id="results-summary"></div>
+        <label class="checkbox-field"><input id="collapse-duplicates-checkbox" type="checkbox"> Collapse duplicate chains per PDB</label>
+      </div>
+      <table id="results-table">
+        <thead>
+          <tr>
+            <th>PDB</th>
+            <th>H/L</th>
+            <th>Matched CDR</th>
+            <th>Heavy chain species</th>
+            <th>Category</th>
+            <th>Target</th>
+            <th>Resolution</th>
+            <th>Method</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </section>
+    <section id="viewer-panel">
+      <div id="viewer-placeholder">Click a result row to view its structure.</div>
+      <div id="viewer-container"></div>
+      <div id="viewer-note" class="hidden"></div>
+      <div id="viewer-legend">
+        <span><i style="background:#7fb3ff"></i>Heavy chain</span>
+        <span><i style="background:#8fe3a0"></i>Light chain</span>
+        <span><i style="background:#ff9f43"></i>Matched CDR</span>
+        <span><i style="background:#e63946"></i>Matched motif residues</span>
+        <span><i style="background:#ff6b9d"></i>Antigen contacts (&le;4.5&Aring;)</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

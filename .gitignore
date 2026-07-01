@@ -1,0 +1,8 @@
+.DS_Store
+.venv/
+data/structures/
+data/antibodies.db
+data/summary_all.tsv
+__pycache__/
+*.pyc
+.claude/
