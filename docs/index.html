@@ -2,12 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>SAbDab CDR Search</title>
+<title>PDB Motif Viewer</title>
 <link rel="stylesheet" href="style.css">
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 </head>
 <body>
   <header id="filter-bar">
+    <div id="app-title">PDB Motif Viewer</div>
     <div class="field">
       <label for="cdr-select">CDR</label>
       <select id="cdr-select">
@@ -50,6 +51,9 @@
     </div>
     <div class="field checkbox-field">
       <label><input id="engineered-checkbox" type="checkbox"> Engineered only</label>
+    </div>
+    <div class="field checkbox-field">
+      <label><input id="complex-checkbox" type="checkbox"> Complex only</label>
     </div>
     <button id="search-button">Search</button>
   </header>

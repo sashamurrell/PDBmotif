@@ -1,7 +1,7 @@
-// Mirrors data/cdr_ranges.py -- keep in sync if the Chothia boundaries there change.
-const CDR_RANGES = {
-  h1: [26, 32], h2: [52, 56], h3: [95, 102],
-  l1: [24, 34], l2: [50, 56], l3: [89, 97],
+const AA3TO1 = {
+  ALA:"A",ARG:"R",ASN:"N",ASP:"D",CYS:"C",GLN:"Q",GLU:"E",GLY:"G",HIS:"H",
+  ILE:"I",LEU:"L",LYS:"K",MET:"M",PHE:"F",PRO:"P",SER:"S",THR:"T",TRP:"W",
+  TYR:"Y",VAL:"V",MSE:"M",SEC:"U",PYL:"O",
 };
 
 const EPITOPE_DISTANCE = 4.5;
@@ -30,6 +30,10 @@ async function loadData() {
   const resp = await fetch("data/antibodies.json");
   allData = await resp.json();
   buildFilterOptions();
+  $("heavy-species-select").value = "homo sapiens";
+  $("light-species-select").value = "homo sapiens";
+  $("complex-checkbox").checked = true;
+  $("collapse-duplicates-checkbox").checked = true;
 }
 
 function buildFilterOptions() {
@@ -58,6 +62,30 @@ function isUnpublished(row) {
     return yr === "25" || yr === "26";
   }
   return false;
+}
+
+function categorizeAntigen(row) {
+  const ag = (row.antigen_species || "").split("|")[0].trim().toLowerCase();
+  if (!ag) return "";
+  const hsp = (row.heavy_species || "").toLowerCase().trim();
+  const lsp = (row.light_species || "").toLowerCase().trim();
+  if ((hsp && ag === hsp) || (lsp && ag === lsp)) return "self";
+  if (/virus|phage|viral|coronavirus|hiv|siv|influenza|hepatitis|dengue|zika|rabies|ebola|herpes|adeno|retrovirus/.test(ag)) return "virus";
+  if (/plasmodium|trypanosoma|leishmania|toxoplasma/.test(ag)) return "parasite";
+  if (/bacteri|bacillus|streptococ|staphyloco|mycobacter|escherichia|salmonella|clostridium|pseudomonas|klebsiella|bordetella|helicobacter/.test(ag)) return "bacteria";
+  if (/aspergillus|candida|cryptococcus|saccharomyces/.test(ag)) return "fungal";
+  if (/synthetic|artificial/.test(ag)) return "synthetic";
+  return "other";
+}
+
+function formatTarget(row) {
+  const name = row.antigen_name || "";
+  if (categorizeAntigen(row) === "self") return name || "n/a";
+  const species = row.antigen_species
+    ? row.antigen_species.split("|")[0].trim()
+    : "";
+  if (species && name) return `${species} ${name}`;
+  return name || species || (row.antigen_chain == null ? "n/a" : "");
 }
 
 function highlightMotif(sequence, motif) {
@@ -116,8 +144,8 @@ function renderTable() {
       <td>${row.hchain}/${row.lchain}</td>
       <td>${highlightMotif(cdrSeq, motif)}</td>
       <td>${row.heavy_species || ""}</td>
-      <td>${row.target_category || ""}</td>
-      <td>${row.target_antigen || row.antigen_name || (row.target_category == null ? "n/a" : "")}</td>
+      <td>${categorizeAntigen(row)}</td>
+      <td>${formatTarget(row)}</td>
       <td>${row.resolution ?? ""}</td>
       <td>${row.method || ""}</td>
     `;
@@ -148,6 +176,7 @@ function runSearch() {
   if (!isNaN(resMax)) results = results.filter(r => r.resolution != null && r.resolution <= resMax);
 
   if ($("engineered-checkbox").checked) results = results.filter(r => r.engineered === 1);
+  if ($("complex-checkbox").checked) results = results.filter(r => r.antigen_chain);
 
   const total_count = results.length;
   const limited = results.slice(0, RESULT_LIMIT);
@@ -156,31 +185,47 @@ function runSearch() {
   renderResults({ results: limited, total_count }, cdr, motif);
 }
 
-function resiRange(start, end) {
-  const out = [];
-  for (let i = start; i <= end; i++) out.push(i);
-  return out;
-}
 
-function parseChainResidueGroups(pdbText, chainId) {
+// Build residue groups for a chain from the already-loaded 3Dmol model.
+// Works for PDB and mmCIF since 3Dmol has already parsed the atoms.
+function getChainResidueGroups(viewer, chainId) {
+  const atoms = viewer.selectedAtoms({ chain: chainId });
   const indexByKey = new Map();
   const groups = [];
-  for (const line of pdbText.split("\n")) {
-    if (!line.startsWith("ATOM")) continue;
-    if (line[21].toUpperCase() !== chainId.toUpperCase()) continue;
-    const resnumStr = line.slice(22, 27).trim();
-    const serial = parseInt(line.slice(6, 11).trim(), 10);
-    let groupIdx = indexByKey.get(resnumStr);
+  for (const atom of atoms) {
+    const key = `${atom.resi}:${atom.icode || ""}`;
+    let groupIdx = indexByKey.get(key);
     if (groupIdx === undefined) {
-      let i = resnumStr.length;
-      while (i > 0 && !/[0-9]/.test(resnumStr[i - 1])) i--;
       groupIdx = groups.length;
-      indexByKey.set(resnumStr, groupIdx);
-      groups.push({ resnum: parseInt(resnumStr.slice(0, i), 10), serials: [] });
+      indexByKey.set(key, groupIdx);
+      groups.push({ aa: AA3TO1[atom.resn] || "X", serials: [] });
     }
-    groups[groupIdx].serials.push(serial);
+    groups[groupIdx].serials.push(atom.serial);
   }
   return groups;
+}
+
+// Find CDR residue groups by matching the known CDR sequence in the chain's sequence.
+function findCdrGroupsBySeq(chainGroups, cdrSeq) {
+  if (!cdrSeq || !chainGroups.length) return null;
+  const chainSeq = chainGroups.map(g => g.aa).join("");
+  const idx = chainSeq.indexOf(cdrSeq);
+  if (idx === -1) return null;
+  return chainGroups.slice(idx, idx + cdrSeq.length);
+}
+
+// Scan every chain in the loaded model and return the first one containing cdrSeq.
+// Handles PDB/CIF chain ID differences — SAbDab renames chains to single letters
+// but RCSB CIF files may use multi-character author chain IDs.
+function findCdrInModel(viewer, cdrSeq) {
+  if (!cdrSeq) return null;
+  const allChainIds = [...new Set(viewer.selectedAtoms({}).map(a => a.chain))];
+  for (const chainId of allChainIds) {
+    const groups = getChainResidueGroups(viewer, chainId);
+    const cdrGroups = findCdrGroupsBySeq(groups, cdrSeq);
+    if (cdrGroups) return { chainId, cdrGroups };
+  }
+  return null;
 }
 
 function setViewerNote(text) {
@@ -211,12 +256,20 @@ async function selectRow(index, cdr) {
     });
   }
 
-  const resp = await fetch(`https://files.rcsb.org/download/${row.pdb}.pdb`);
-  if (!resp.ok) return;
-  const pdbData = await resp.text();
+  let structData, structFmt;
+  const pdbResp = await fetch(`https://files.rcsb.org/download/${row.pdb}.pdb`);
+  if (pdbResp.ok) {
+    structData = await pdbResp.text();
+    structFmt = "pdb";
+  } else {
+    const cifResp = await fetch(`https://files.rcsb.org/download/${row.pdb}.cif`);
+    if (!cifResp.ok) return;
+    structData = await cifResp.text();
+    structFmt = "cif";
+  }
 
   viewer.clear();
-  viewer.addModel(pdbData, "pdb");
+  viewer.addModel(structData, structFmt);
   viewer.setHoverable(
     {},
     true,
@@ -241,40 +294,51 @@ async function selectRow(index, cdr) {
     }
   );
   viewer.setStyle({}, { cartoon: { color: "#888888" } });
-  if (row.hchain && row.hchain !== "NA") {
-    viewer.setStyle({ chain: row.hchain }, { cartoon: { color: "#7fb3ff" } });
-  }
-  if (row.lchain && row.lchain !== "NA") {
-    viewer.setStyle({ chain: row.lchain }, { cartoon: { color: "#8fe3a0" } });
-  }
 
-  const cdrChain = cdr[0] === "h" ? row.hchain : row.lchain;
-  if (cdrChain && cdrChain !== "NA") {
-    const [start, end] = CDR_RANGES[cdr];
-    const sel = { chain: cdrChain, resi: resiRange(start, end) };
-    viewer.setStyle(sel, { cartoon: { color: "#ff9f43" } });
+  const cdrSeq = row[`cdr_${cdr}`] || "";
+  const isHeavyCdr = cdr[0] === "h";
+
+  // Find antibody chains by sequence rather than by chain ID — SAbDab renames chains
+  // to single letters (H, L) but RCSB CIF files may use multi-character author IDs.
+  const cdrFind = findCdrInModel(viewer, cdrSeq);
+  const partnerSeq = isHeavyCdr ? (row.cdr_l3 || row.cdr_l1 || "") : (row.cdr_h3 || row.cdr_h1 || "");
+  const partnerFind = findCdrInModel(viewer, partnerSeq);
+
+  const heavyChainId = isHeavyCdr ? cdrFind?.chainId : partnerFind?.chainId;
+  const lightChainId = isHeavyCdr ? partnerFind?.chainId : cdrFind?.chainId;
+  if (heavyChainId) viewer.setStyle({ chain: heavyChainId }, { cartoon: { color: "#7fb3ff" } });
+  if (lightChainId) viewer.setStyle({ chain: lightChainId }, { cartoon: { color: "#8fe3a0" } });
+
+  if (cdrFind) {
+    const cdrSerials = cdrFind.cdrGroups.flatMap((g) => g.serials);
+    viewer.setStyle({ serial: cdrSerials }, { cartoon: { color: "#ff9f43" } });
 
     let matchedSerials = [];
     if (lastMotif) {
-      const cdrSeq = row[`cdr_${cdr}`] || "";
       const matchIdx = cdrSeq.indexOf(lastMotif);
       if (matchIdx !== -1) {
-        const cdrGroups = parseChainResidueGroups(pdbData, cdrChain).filter((g) => g.resnum >= start && g.resnum <= end);
-        matchedSerials = cdrGroups.slice(matchIdx, matchIdx + lastMotif.length).flatMap((g) => g.serials);
+        matchedSerials = cdrFind.cdrGroups.slice(matchIdx, matchIdx + lastMotif.length).flatMap((g) => g.serials);
         if (matchedSerials.length) {
           viewer.setStyle({ serial: matchedSerials }, { cartoon: { color: "#e63946" }, stick: { colorscheme: "redCarbon", radius: 0.3 } });
         }
       }
     }
 
-    const epitopeBasisSel = matchedSerials.length ? { serial: matchedSerials } : sel;
+    const epitopeBasisSel = matchedSerials.length ? { serial: matchedSerials } : { serial: cdrSerials };
+    const dbAntigenChains = (row.antigen_chain || "").split(";").filter(Boolean);
+    let antigenChainIds = dbAntigenChains;
 
-    const antigenChains = (row.antigen_chain || "").split(";").filter(Boolean);
-    const contactBasis = matchedSerials.length ? "the matched motif" : "the CDR loop";
-    if (antigenChains.length) {
-      const contactAtoms = viewer.selectedAtoms({ chain: antigenChains, within: { distance: EPITOPE_DISTANCE, sel: epitopeBasisSel } });
+    // If db antigen chain IDs match nothing in this model, fall back to all non-antibody chains
+    if (antigenChainIds.length && !viewer.selectedAtoms({ chain: antigenChainIds }).length) {
+      const abChainIds = new Set([heavyChainId, lightChainId].filter(Boolean));
+      const allChainIds = [...new Set(viewer.selectedAtoms({}).map(a => a.chain))];
+      antigenChainIds = allChainIds.filter(c => !abChainIds.has(c));
+    }
+
+    if (antigenChainIds.length) {
+      const contactAtoms = viewer.selectedAtoms({ chain: antigenChainIds, within: { distance: EPITOPE_DISTANCE, sel: epitopeBasisSel } });
       const contactGroupKeys = new Set(contactAtoms.map((a) => `${a.chain}:${a.resi}:${a.icode || ""}`));
-      const allAntigenAtoms = viewer.selectedAtoms({ chain: antigenChains });
+      const allAntigenAtoms = viewer.selectedAtoms({ chain: antigenChainIds });
       const epitopeSerials = allAntigenAtoms
         .filter((a) => contactGroupKeys.has(`${a.chain}:${a.resi}:${a.icode || ""}`))
         .map((a) => a.serial);
@@ -284,13 +348,14 @@ async function selectRow(index, cdr) {
           { cartoon: { color: "#ff6b9d" }, stick: { colorscheme: "magentaCarbon", radius: 0.22 } }
         );
       } else {
-        setViewerNote(`No antigen contacts within ${EPITOPE_DISTANCE}Å of ${contactBasis}.`);
+        const basis = matchedSerials.length ? "motif" : "CDR loop";
+        setViewerNote(`No binding to ${basis} within ${EPITOPE_DISTANCE}Å.`);
       }
     } else {
       setViewerNote("No antigen present in this structure.");
     }
 
-    viewer.zoomTo(sel);
+    viewer.zoomTo({ serial: cdrSerials });
   } else {
     viewer.zoomTo();
   }

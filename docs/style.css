@@ -7,6 +7,14 @@ body {
   background: #f7f7f8;
 }
 
+#app-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+
 #filter-bar {
   display: flex;
   flex-wrap: wrap;
