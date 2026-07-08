@@ -188,19 +188,26 @@ function runSearch() {
 
 // Build residue groups for a chain from the already-loaded 3Dmol model.
 // Works for PDB and mmCIF since 3Dmol has already parsed the atoms.
+// Uses sequential scan rather than resi+icode key so that structures where
+// multiple residues share the same auth_seq_id (CIF insertion-coded loops
+// stored with pdbx_PDB_ins_code="?") are correctly split into separate groups.
 function getChainResidueGroups(viewer, chainId) {
   const atoms = viewer.selectedAtoms({ chain: chainId });
-  const indexByKey = new Map();
   const groups = [];
+  let prevResi = null, prevIcode = null, prevResn = null;
   for (const atom of atoms) {
-    const key = `${atom.resi}:${atom.icode || ""}`;
-    let groupIdx = indexByKey.get(key);
-    if (groupIdx === undefined) {
-      groupIdx = groups.length;
-      indexByKey.set(key, groupIdx);
+    const icode = atom.icode || "";
+    const contextChanged = atom.resi !== prevResi || icode !== prevIcode || atom.resn !== prevResn;
+    // Also split on backbone N within the same context: handles CIF structures where
+    // consecutive identical residues (e.g. 6× TYR in a CDR loop) share the same
+    // auth_seq_id with no pdbx_PDB_ins_code, making resi/icode/resn all identical.
+    // Backbone N is always the first atom of each residue in PDB/CIF ordering.
+    const isBackboneN = !contextChanged && atom.atom === "N";
+    if (contextChanged || isBackboneN) {
       groups.push({ aa: AA3TO1[atom.resn] || "X", serials: [] });
+      prevResi = atom.resi; prevIcode = icode; prevResn = atom.resn;
     }
-    groups[groupIdx].serials.push(atom.serial);
+    groups[groups.length - 1].serials.push(atom.serial);
   }
   return groups;
 }
@@ -214,15 +221,47 @@ function findCdrGroupsBySeq(chainGroups, cdrSeq) {
   return chainGroups.slice(idx, idx + cdrSeq.length);
 }
 
+// Fuzzy match: like findCdrGroupsBySeq but allows up to maxGaps residues from cdrSeq
+// to be absent from the chain (disordered/unmodeled residues in the RCSB structure).
+// Returns an array of length cdrSeq.length with a chain group at each matched position
+// and null at gap positions, preserving the 1:1 index correspondence with cdrSeq so
+// motif slicing still works correctly.
+function findCdrGroupsFuzzy(chainGroups, cdrSeq, maxGaps = 4) {
+  if (!cdrSeq || !chainGroups.length) return null;
+  const chainSeq = chainGroups.map(g => g.aa).join("");
+  const n = cdrSeq.length;
+  const m = chainSeq.length;
+  for (let start = 0; start <= m - (n - maxGaps); start++) {
+    const result = new Array(n).fill(null);
+    let ci = start, gaps = 0, ok = true;
+    for (let qi = 0; qi < n; qi++) {
+      if (ci >= m) { gaps += (n - qi); break; }
+      if (chainSeq[ci] === cdrSeq[qi]) {
+        result[qi] = chainGroups[ci++];
+      } else {
+        if (++gaps > maxGaps) { ok = false; break; }
+      }
+    }
+    if (ok && gaps <= maxGaps) return result;
+  }
+  return null;
+}
+
 // Scan every chain in the loaded model and return the first one containing cdrSeq.
 // Handles PDB/CIF chain ID differences — SAbDab renames chains to single letters
 // but RCSB CIF files may use multi-character author chain IDs.
+// Falls back to a fuzzy match when residues are disordered/unmodeled in RCSB.
 function findCdrInModel(viewer, cdrSeq) {
   if (!cdrSeq) return null;
   const allChainIds = [...new Set(viewer.selectedAtoms({}).map(a => a.chain))];
   for (const chainId of allChainIds) {
     const groups = getChainResidueGroups(viewer, chainId);
     const cdrGroups = findCdrGroupsBySeq(groups, cdrSeq);
+    if (cdrGroups) return { chainId, cdrGroups };
+  }
+  for (const chainId of allChainIds) {
+    const groups = getChainResidueGroups(viewer, chainId);
+    const cdrGroups = findCdrGroupsFuzzy(groups, cdrSeq);
     if (cdrGroups) return { chainId, cdrGroups };
   }
   return null;
@@ -304,20 +343,35 @@ async function selectRow(index, cdr) {
   const partnerSeq = isHeavyCdr ? (row.cdr_l3 || row.cdr_l1 || "") : (row.cdr_h3 || row.cdr_h1 || "");
   const partnerFind = findCdrInModel(viewer, partnerSeq);
 
-  const heavyChainId = isHeavyCdr ? cdrFind?.chainId : partnerFind?.chainId;
-  const lightChainId = isHeavyCdr ? partnerFind?.chainId : cdrFind?.chainId;
+  // If the selected CDR wasn't found (e.g. disordered residues), fall back to another
+  // CDR of the same chain just to identify the chain for colouring.
+  let chainFind = cdrFind;
+  if (!chainFind) {
+    const fallbackSeqs = isHeavyCdr
+      ? [row.cdr_h1, row.cdr_h2, row.cdr_h3]
+      : [row.cdr_l1, row.cdr_l2, row.cdr_l3];
+    for (const seq of fallbackSeqs) {
+      if (seq && seq !== cdrSeq) {
+        chainFind = findCdrInModel(viewer, seq);
+        if (chainFind) break;
+      }
+    }
+  }
+
+  const heavyChainId = isHeavyCdr ? chainFind?.chainId : partnerFind?.chainId;
+  const lightChainId = isHeavyCdr ? partnerFind?.chainId : chainFind?.chainId;
   if (heavyChainId) viewer.setStyle({ chain: heavyChainId }, { cartoon: { color: "#7fb3ff" } });
   if (lightChainId) viewer.setStyle({ chain: lightChainId }, { cartoon: { color: "#8fe3a0" } });
 
   if (cdrFind) {
-    const cdrSerials = cdrFind.cdrGroups.flatMap((g) => g.serials);
+    const cdrSerials = cdrFind.cdrGroups.filter(g => g).flatMap((g) => g.serials);
     viewer.setStyle({ serial: cdrSerials }, { cartoon: { color: "#ff9f43" } });
 
     let matchedSerials = [];
     if (lastMotif) {
       const matchIdx = cdrSeq.indexOf(lastMotif);
       if (matchIdx !== -1) {
-        matchedSerials = cdrFind.cdrGroups.slice(matchIdx, matchIdx + lastMotif.length).flatMap((g) => g.serials);
+        matchedSerials = cdrFind.cdrGroups.slice(matchIdx, matchIdx + lastMotif.length).filter(g => g).flatMap((g) => g.serials);
         if (matchedSerials.length) {
           viewer.setStyle({ serial: matchedSerials }, { cartoon: { color: "#e63946" }, stick: { colorscheme: "redCarbon", radius: 0.3 } });
         }
