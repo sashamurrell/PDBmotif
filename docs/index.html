@@ -56,6 +56,15 @@
       <label><input id="complex-checkbox" type="checkbox"> Complex only</label>
     </div>
     <button id="search-button">Search</button>
+    <div class="field" id="annotate-field">
+      <label for="annotate-input">Annotate any structure</label>
+      <div class="annotate-controls">
+        <input id="annotate-input" type="text" placeholder="PDB ID (e.g. 9PY5)">
+        <button id="annotate-button" type="button">Annotate</button>
+        <button id="upload-button" type="button">Upload…</button>
+        <input id="upload-file-input" type="file" accept=".pdb,.cif,.ent" hidden>
+      </div>
+    </div>
   </header>
 
   <main id="content">
@@ -83,6 +92,7 @@
     <section id="viewer-panel">
       <div id="viewer-placeholder">Click a result row to view its structure.</div>
       <div id="viewer-container"></div>
+      <div id="cdr-readout" class="hidden"></div>
       <div id="viewer-note" class="hidden"></div>
       <div id="viewer-legend">
         <span><i style="background:#7fb3ff"></i>Heavy chain</span>
@@ -90,10 +100,12 @@
         <span><i style="background:#ff9f43"></i>Matched CDR</span>
         <span><i style="background:#e63946"></i>Matched motif residues</span>
         <span><i style="background:#ff6b9d"></i>Antigen contacts (&le;4.5&Aring;)</span>
+        <span><i style="background:#a34d00"></i>Disorder break (flanking)</span>
       </div>
     </section>
   </main>
 
+  <script src="numbering.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

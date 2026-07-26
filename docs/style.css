@@ -19,7 +19,8 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: end;
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 20px;
   padding: 12px 16px;
   background: #ffffff;
   border-bottom: 1px solid #ddd;
@@ -30,15 +31,23 @@ body {
   flex-direction: column;
   gap: 2px;
   font-size: 12px;
+  position: relative;
 }
 
 .field label {
   color: #555;
 }
 
+/* Floated out of flow so the hint doesn't add height to the Motif field and
+   push its input above the bottom-aligned neighbours. */
 .field-hint {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
   font-size: 10px;
   color: #999;
+  white-space: nowrap;
 }
 
 .field select, .field input {
@@ -69,6 +78,38 @@ body {
 }
 
 #search-button:hover { background: #1d4ed8; }
+
+/* Force the annotate section onto its own row below the filter/search controls. */
+#annotate-field {
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #eee;
+}
+
+.annotate-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.annotate-controls input[type="text"] {
+  min-width: 120px;
+}
+
+#annotate-button, #upload-button {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #475569;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#annotate-button:hover, #upload-button:hover { background: #334155; }
 
 #content {
   display: flex;
@@ -193,9 +234,56 @@ body {
   height: 100%;
 }
 
-#viewer-note {
+#cdr-readout {
   position: absolute;
   top: 10px;
+  left: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #ddd;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+#cdr-readout.hidden {
+  display: none;
+}
+
+#cdr-readout .cdr-label {
+  font-weight: 700;
+  color: #ff9f43;
+  flex: none;
+}
+
+#cdr-readout .cdr-seq {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 1px;
+  flex: none;
+}
+
+#cdr-readout .cdr-seq .res { color: #f0f0f0; }
+
+#cdr-readout .cdr-seq .dis {
+  color: #ffb020;
+  font-weight: 700;
+}
+#cdr-readout .cdr-seq .dis::before { content: "["; }
+#cdr-readout .cdr-seq .dis::after { content: "]"; }
+
+#cdr-readout .cdr-msg {
+  color: #aaa;
+  flex: none;
+}
+
+#viewer-note {
+  position: absolute;
+  top: 44px;
   left: 10px;
   background: rgba(230, 57, 70, 0.85);
   color: white;

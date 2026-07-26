@@ -2,7 +2,10 @@
 .venv/
 data/structures/
 data/antibodies.db
+data/summary_all.csv
 data/summary_all.tsv
+data/missing_meta.json
+data/fetch_failures.log
 __pycache__/
 *.pyc
 .claude/

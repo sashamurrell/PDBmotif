@@ -12,7 +12,7 @@ import sqlite3
 from cdr_ranges import CDR_RANGES
 
 HERE = os.path.dirname(__file__)
-SUMMARY_PATH = os.path.join(HERE, "summary_all.tsv")
+SUMMARY_PATH = os.path.join(HERE, "summary_all.csv")
 STRUCTURES_DIR = os.path.join(HERE, "structures")
 DB_PATH = os.path.join(HERE, "antibodies.db")
 
@@ -24,6 +24,14 @@ AA3to1 = {
 }
 
 NA_VALUES = {"", "NA", "None"}
+
+
+def normalise_pdb(raw):
+    """Strip the pdb_0000 prefix used in the new SAbDab ID format."""
+    raw = raw.strip().lower()
+    if raw.startswith("pdb_"):
+        raw = raw[4:].lstrip("0") or raw[4:]
+    return raw
 
 
 def parse_paired_hl(lines):
@@ -98,9 +106,9 @@ def load_summary():
     """
     by_key = {}
     with open(SUMMARY_PATH) as f:
-        reader = csv.DictReader(f, delimiter="\t")
+        reader = csv.DictReader(f)
         for row in reader:
-            pdb = row["pdb"].strip().lower()
+            pdb = normalise_pdb(row["PDB"])
             hchain = row["Hchain"].strip().upper()
             lchain = row["Lchain"].strip().upper()
             by_key[(pdb, hchain, lchain)] = row
@@ -162,8 +170,9 @@ def build_metadata_row(summary_row):
     meta = {col: normalize_na(summary_row.get(col)) for col in METADATA_COLUMNS}
     meta["heavy_species"] = clean_species(meta["heavy_species"])
     meta["light_species"] = clean_species(meta["light_species"])
-    meta["engineered"] = coerce_bool(summary_row.get("engineered", ""))
-    meta["scfv"] = coerce_bool(summary_row.get("scfv", ""))
+    # engineered and scfv were removed from the SAbDab summary in the 2026 API update.
+    meta["engineered"] = coerce_bool(summary_row.get("engineered", "")) if "engineered" in summary_row else None
+    meta["scfv"] = coerce_bool(summary_row.get("scfv", "")) if "scfv" in summary_row else None
     meta["resolution"] = coerce_resolution(summary_row.get("resolution"))
     return meta
 
