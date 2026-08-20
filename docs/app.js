@@ -68,39 +68,105 @@ function isUnpublished(row) {
   return false;
 }
 
-function categorizeAntigen(row) {
-  const ag = (row.antigen_species || "").split("|")[0].trim().toLowerCase();
-  if (!ag) return "";
-  const hsp = (row.heavy_species || "").toLowerCase().trim();
-  const lsp = (row.light_species || "").toLowerCase().trim();
-  if ((hsp && ag === hsp) || (lsp && ag === lsp)) return "self";
-  if (/virus|phage|viral|coronavirus|hiv|siv|influenza|hepatitis|dengue|zika|rabies|ebola|herpes|adeno|retrovirus/.test(ag)) return "virus";
-  if (/plasmodium|trypanosoma|leishmania|toxoplasma/.test(ag)) return "parasite";
-  if (/bacteri|bacillus|streptococ|staphyloco|mycobacter|escherichia|salmonella|clostridium|pseudomonas|klebsiella|bordetella|helicobacter/.test(ag)) return "bacteria";
-  if (/aspergillus|candida|cryptococcus|saccharomyces/.test(ag)) return "fungal";
-  if (/synthetic|artificial/.test(ag)) return "synthetic";
-  return "other";
+// High-confidence antigen-name markers -> source organism + category. Many antigens are
+// deposited as synthetic-peptide constructs with a null antigen_species, so the pathogen can
+// only be recovered from the protein name itself (e.g. "gp41 MPER Peptide" is HIV with no
+// species field). Used both to categorise and, when antigen_species is missing, to prefix the
+// target with the organism. Ordered — first match wins. Kept high-precision: nothing non-HIV is
+// named gp120/gp160/MPER, etc.
+// `speciesRe` recognises a deposited antigen_species token that already names this pathogen, so
+// the more specific real species is kept (e.g. "simian immunodeficiency virus" stays SIV, not
+// "HIV-1"); otherwise the species field is the expression host/scaffold and the target uses the
+// marker organism.
+const ANTIGEN_MARKERS = [
+  { re: /\bgp41\b|\bgp120\b|\bgp160\b|\bmper\b|envelope glycoprotein gp/i, organism: "HIV-1", category: "virus", speciesRe: /immunodeficiency|\bhiv\b|\bsiv\b|lentivir/i },
+  { re: /neuraminidase|hemagglutinin/i, organism: "Influenza", category: "virus", speciesRe: /influenza [ab]|influenza virus|orthomyxo/i },
+  { re: /spike glycoprotein|spike protein s/i, organism: "Coronavirus", category: "virus", speciesRe: /coronavirus|sars|\bmers\b|betacoronavirus/i },
+  { re: /circumsporozoite/i, organism: "Plasmodium", category: "parasite", speciesRe: /plasmodium|malaria/i },
+];
+function antigenMarker(row) {
+  const name = cleanAntigenName(row.antigen_name);
+  return ANTIGEN_MARKERS.find((m) => m.re.test(name)) || null;
 }
 
-// SAbDab lists every resolved antigen component in antigen_name, joined by "|",
-// including the N-linked glycans on a glycoprotein (HIV Env, SARS spike, etc).
-// Drop those glycan entries — their IUPAC names always contain "pyranose"/"furanose" —
-// so the target shows the actual protein antigen. If a structure's only antigen is a
-// sugar (hapten-like), keep it rather than returning nothing.
+// Categorise the antigen as self (host), a pathogen class, or a small molecule.
+// A high-confidence pathogen protein marker (gp120, spike, circumsporozoite, …) wins over
+// everything, because antigen_species is frequently the *expression host* — e.g. an HIV gp120
+// immunogen produced in human cells is tagged "homo sapiens" and would otherwise mis-fire the
+// self test (and scaffold-fusion antigens mis-fire bacteria/fungal). Otherwise: self, then the
+// keyword scans over `antigen_species + antigen_name` (so null-species pathogens like "Endogenous
+// retrovirus …" still resolve). "influenza\b" avoids matching the bacterium H. influenzae, and
+// "adenovirus" (not bare "adeno") avoids adenosine/adenocarcinoma. Bacteria uses a "bacter"
+// catch-all plus a curated genus list from the data. Falls back to "small molecule" for
+// hapten-only antigens, "other" for any remaining real antigen, and "" (apo) when there's none.
+function categorizeAntigen(row) {
+  const marker = antigenMarker(row);
+  if (marker) return marker.category;
+  const sp = (row.antigen_species || "").split("|")[0].trim().toLowerCase();
+  const hsp = (row.heavy_species || "").toLowerCase().trim();
+  const lsp = (row.light_species || "").toLowerCase().trim();
+  if (sp && ((hsp && sp === hsp) || (lsp && sp === lsp))) return "self";
+  const text = `${sp} ${cleanAntigenName(row.antigen_name)}`.toLowerCase();
+  if (/virus|phage|viral|coronavirus|hiv|siv|influenza\b|hepatitis|dengue|zika|rabies|ebola|herpes|adenovirus|retrovirus|sars|mers|norovirus|rotavirus/.test(text)) return "virus";
+  if (/plasmodium|trypanosoma|leishmania|toxoplasma|malaria|babesia|theileria|cryptosporidium|giardia|schistosoma/.test(text)) return "parasite";
+  if (/bacter|bacill|coccus|streptococ|staphyloco|streptomyces|escherichia|salmonella|shigella|klebsiella|pseudomonas|mycoplasma|clostridi|listeria|yersinia|neisseria|bordetella|vibrio|thermotoga|thermus|aquifex|borreli|porphyromonas|shewanella|ruegeria|amycolatopsis|saccharopolyspora|dickeya|anaplasma|haemophilus|enterococc|burkholderia|francisella|brucella|legionella|chlamydia|treponema|leptospira|rickettsia|coxiella|serratia|prevotella|lactobacill|lactococc|bacteroides|deinococcus|geobacill|paenibacill|xanthomonas|agrobacter|rhizobium|moraxella/.test(text)) return "bacteria";
+  if (/aspergillus|candida|cryptococcus|saccharomyces|fungal|fungus|pichia|histoplasma|blastomyces|coccidioides|pneumocystis|malassezia|trichophyton/.test(text)) return "fungal";
+  if (/synthetic|artificial|de novo|designed/.test(text)) return "synthetic";
+  const at = (row.antigen_type || "").toUpperCase();
+  if (!/PROTEIN|PEPTIDE|SUGAR|RNA|DNA/.test(at) && /HAPTEN/.test(at)) return "small molecule";
+  if (/PROTEIN|PEPTIDE|SUGAR|RNA|DNA/.test(at) || cleanAntigenName(row.antigen_name)) return "other";
+  return "";
+}
+
+// Components of antigen_name (joined by "|") that are crystallisation/buffer additives rather
+// than the antigen itself: ions ("X ION"), buffers, cryo-solvents/precipitants, reductants, and
+// the N-linked glycan sugars on glycoproteins (IUPAC names always contain "pyranose"/"furanose").
+// These are dropped from the displayed target. Ions are matched by a trailing " ION" so genuine
+// proteins such as "…ligand-gated ion channel" are preserved; everything else is matched by
+// EXACT name so genuine haptens are kept — e.g. "Glycerol-3-phosphate dehydrogenase" survives
+// GLYCEROL, and "…BENZIMIDAZOLE…" survives IMIDAZOLE.
+const ADDITIVE_NAMES = new Set([
+  // buffers
+  "IMIDAZOLE", "TRIS", "BIS-TRIS", "BIS-TRIS PROPANE", "HEPES", "MES", "MOPS", "PIPES",
+  "2-AMINO-2-HYDROXYMETHYL-PROPANE-1,3-DIOL", "2-(N-MORPHOLINO)-ETHANESULFONIC ACID",
+  // cryo-solvents / precipitants
+  "GLYCEROL", "1,2-ETHANEDIOL", "ETHYLENE GLYCOL", "DI(HYDROXYETHYL)ETHER", "TRIETHYLENE GLYCOL",
+  "TETRAETHYLENE GLYCOL", "PENTAETHYLENE GLYCOL", "HEXAETHYLENE GLYCOL", "POLYETHYLENE GLYCOL",
+  "2-METHYL-2,4-PENTANEDIOL", "(4R)-2-METHYLPENTANE-2,4-DIOL", "(4S)-2-METHYLPENTANE-2,4-DIOL",
+  "DIMETHYL SULFOXIDE", "SUCROSE", "TREHALOSE", "BETAINE", "GLYCINE BETAINE", "UREA", "GUANIDINE",
+  "FORMAMIDE", "ETHANOL", "METHANOL", "ISOPROPYL ALCOHOL", "2-PROPANOL", "1,4-DIOXANE", "ACETONE", "ACETONITRILE",
+  // acids / reductants / misc additives
+  "ACETIC ACID", "FORMIC ACID", "CITRIC ACID", "SUCCINIC ACID", "TARTARIC ACID", "MALONIC ACID", "MALIC ACID",
+  "EDTA", "ETHYLENEDIAMINETETRAACETIC ACID", "DITHIOTHREITOL", "1,4-DITHIOTHREITOL",
+  "2,3-DIHYDROXY-1,4-DITHIOBUTANE", "2-MERCAPTOETHANOL", "BETA-MERCAPTOETHANOL",
+  "SPERMIDINE", "SPERMINE", "PUTRESCINE", "BENZAMIDINE", "PHENOL", "WATER",
+]);
+function isSolventComponent(part) {
+  return / ion$/i.test(part) || /pyranose|furanose/i.test(part) || ADDITIVE_NAMES.has(part.toUpperCase());
+}
 function cleanAntigenName(name) {
   if (!name) return "";
   const parts = name.split("|").map(s => s.trim()).filter(Boolean);
-  const nonSugar = parts.filter(p => !/pyranose|furanose/i.test(p));
-  return (nonSugar.length ? nonSugar : parts).join(", ");
+  return parts.filter(p => !isSolventComponent(p)).join(", ");
 }
 
 function formatTarget(row) {
   const name = cleanAntigenName(row.antigen_name);
   if (categorizeAntigen(row) === "self") return name || "n/a";
-  const species = row.antigen_species
-    ? row.antigen_species.split("|")[0].trim()
-    : "";
-  if (species && name) return `${species} ${name}`;
+  const marker = antigenMarker(row);
+  let species;
+  if (marker) {
+    // A pathogen marker fired: keep the deposited species only if it already names that pathogen
+    // (more specific), otherwise it's the expression host/scaffold — use the marker organism.
+    const tokens = (row.antigen_species || "").split("|").map((s) => s.trim()).filter(Boolean);
+    species = tokens.find((t) => marker.speciesRe.test(t)) || marker.organism;
+  } else {
+    species = row.antigen_species ? row.antigen_species.split("|")[0].trim() : "";
+  }
+  // Avoid "HIV-1 HIV-1 GP120 …": if the name already mentions the organism, don't prefix it.
+  if (species && name) {
+    return name.toLowerCase().includes(species.toLowerCase()) ? name : `${species} ${name}`;
+  }
   return name || species || (row.antigen_chain == null ? "n/a" : "");
 }
 
@@ -201,6 +267,75 @@ function runSearch() {
   renderResults({ results: limited, total_count }, cdr, motif);
 }
 
+
+// Parse the _atom_site loop of an mmCIF string and return per-atom metadata
+// ({ comp, seq, icode }) in file order. Returns null if the loop or the required
+// columns can't be found. Used to recover author numbering (see fixCifResidueNumbering).
+function parseCifAtomMeta(text) {
+  const cols = [];
+  let icodeCol = -1, compCol = -1, seqCol = -1, sawHeader = false, inData = false;
+  const meta = [];
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (t.startsWith("_atom_site.")) {
+      if (t === "_atom_site.pdbx_PDB_ins_code") icodeCol = cols.length;
+      if (t === "_atom_site.label_comp_id") compCol = cols.length;
+      if (t === "_atom_site.auth_seq_id") seqCol = cols.length;
+      cols.push(t);
+      sawHeader = true;
+      continue;
+    }
+    if (sawHeader && !inData) {
+      inData = true;
+      if (icodeCol === -1 || compCol === -1 || seqCol === -1) return null;
+    }
+    if (!inData) continue;
+    if (raw.startsWith("ATOM") || raw.startsWith("HETATM")) {
+      const f = t.split(/\s+/);
+      let ic = f[icodeCol];
+      if (ic === "?" || ic === "." || ic == null) ic = "";
+      meta.push({ comp: f[compCol], seq: f[seqCol], icode: ic });
+    } else if (meta.length && (t === "#" || t === "" || t === "loop_" || t.startsWith("_"))) {
+      break; // end of the atom_site data block
+    }
+  }
+  return meta.length ? meta : null;
+}
+
+// 3Dmol's mmCIF parser ignores pdbx_PDB_ins_code, so every residue in an insertion-coded
+// loop (e.g. a CDR-H3 numbered 100A..100T, as in 7T77) is loaded with the same resi (100)
+// and no icode. Two consequences: hover labels can't distinguish them, and — because 3Dmol's
+// cartoon builder groups residues by resi — the whole block collapses to one residue and the
+// ribbon is never drawn through the loop. Re-parse the raw CIF, give every residue a unique
+// resi (per chain, in file order) so the cartoon renders, restore the icode, and stash the
+// true author label (e.g. "100A") on each atom for the hover readout. Atoms are matched
+// positionally (both are in atom_site order); we bail without mutating if counts or residue
+// names don't line up, and no-op for PDB input whose parser already reads column-27.
+function fixCifResidueNumbering(viewer, text, fmt) {
+  if (fmt !== "cif") return false;
+  const meta = parseCifAtomMeta(text);
+  if (!meta) return false;
+  const atoms = viewer.selectedAtoms({});
+  if (atoms.length !== meta.length) return false;
+  for (let i = 0; i < atoms.length; i++) {
+    if (atoms[i].resn !== meta[i].comp) return false; // order mismatch — leave atoms untouched
+  }
+  const counters = {};
+  let prevKey = null, resi = 0;
+  for (let i = 0; i < atoms.length; i++) {
+    const a = atoms[i], m = meta[i];
+    const key = `${a.chain}|${m.seq}|${m.icode}`;
+    if (key !== prevKey) {
+      counters[a.chain] = (counters[a.chain] || 0) + 1;
+      resi = counters[a.chain];
+      prevKey = key;
+    }
+    a.resLabel = `${m.seq}${m.icode}`; // true author number+insertion code for display
+    a.icode = m.icode;
+    a.resi = resi;                     // unique per residue so the cartoon renders
+  }
+  return true;
+}
 
 // Build residue groups for a chain from the already-loaded 3Dmol model.
 // Works for PDB and mmCIF since 3Dmol has already parsed the atoms.
@@ -320,8 +455,8 @@ function setupViewerHover() {
     true,
     (atom) => {
       if (atom.label) return;
-      const icode = (atom.icode || "").trim();
-      atom.label = viewer.addLabel(`${atom.resn} ${atom.resi}${icode} (chain ${atom.chain})`, {
+      const label = atom.resLabel != null ? atom.resLabel : `${atom.resi}${(atom.icode || "").trim()}`;
+      atom.label = viewer.addLabel(`${atom.resn} ${label} (chain ${atom.chain})`, {
         position: atom,
         backgroundColor: "black",
         backgroundOpacity: 0.7,
@@ -359,6 +494,7 @@ function annotateStructure(structData, structFmt, label) {
   ensureViewer();
   viewer.clear();
   viewer.addModel(structData, structFmt);
+  fixCifResidueNumbering(viewer, structData, structFmt);
   setupViewerHover();
   viewer.setStyle({}, { cartoon: { color: "#888888" } });
 
@@ -371,11 +507,14 @@ function annotateStructure(structData, structFmt, label) {
     if (!res) continue;
     detected.push({ chainId, chainType: res.chainType });
     viewer.setStyle({ chain: chainId }, { cartoon: { color: res.isHeavy ? "#7fb3ff" : "#8fe3a0" } });
-    for (const cdrSeq of Object.values(res.cdrs)) {
+    for (const [cdrName, cdrSeq] of Object.entries(res.cdrs)) {
       if (!cdrSeq) continue;
       const cdrGroups = findCdrGroupsBySeq(groups, cdrSeq) || findCdrGroupsFuzzy(groups, cdrSeq);
       if (cdrGroups) {
         viewer.setStyle({ serial: expandedSerials(cdrGroups, groups) }, { cartoon: { color: "#ff9f43" } });
+        // Show the CDR-H3 sequence readout (the annotate path clears it on load but
+        // previously never populated it — only the search-results path did).
+        if (res.isHeavy && cdrName === "h3") renderCdrReadout(cdrName, cdrSeq, cdrGroups);
       }
     }
   }
@@ -444,6 +583,7 @@ async function selectRow(index, cdr) {
 
   viewer.clear();
   viewer.addModel(structData, structFmt);
+  fixCifResidueNumbering(viewer, structData, structFmt);
   setupViewerHover();
   viewer.setStyle({}, { cartoon: { color: "#888888" } });
 
